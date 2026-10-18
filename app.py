@@ -61,10 +61,10 @@ def generate_market_analysis(stock_name, ticker, df, news_items, change_pct):
     analysis = f"🤖 **[AI 실시간 등락 요인 및 시황 분석]**\n\n"
     if change_pct >= 0:
         analysis += f"• **등락 현황**: **{stock_name} ({ticker})** 종목은 최근 기준 **+{change_pct:.2f}% 상승세(반등)**를 나타내고 있습니다.\n"
-        analysis += f"• **상승 분석**: RSI({rsi:.1f}) 지표와 볼린저밴드 하단 부근에서의 저가 매수세 유입, 그리고 기술적 반등 모멘텀이 복합적으로 작용하고 있을 가능성이 높습니다.\n"
+        analysis += f"• **상승 분석**: RSI({rsi:.2f}) 지표와 볼린저밴드 하단 부근에서의 저가 매수세 유입, 그리고 기술적 반등 모멘텀이 복합적으로 작용하고 있을 가능성이 높습니다.\n"
     else:
         analysis += f"• **등락 현황**: **{stock_name} ({ticker})** 종목은 최근 기준 **{change_pct:.2f}% 하락세(조정)**를 나타내고 있습니다.\n"
-        analysis += f"• **하락 분석**: 고점 대비 낙폭(MDD: {mdd:.2f}%)이 발생하며 단기 매물 출회 및 조정 국면에 진입해 있으며, RSI({rsi:.1f}) 과매도 구간 지지력 테스트가 진행 중입니다.\n"
+        analysis += f"• **하락 분석**: 고점 대비 낙폭(MDD: {mdd:.2f}%)이 발생하며 단기 매물 출회 및 조정 국면에 진입해 있으며, RSI({rsi:.2f}) 과매도 구간 지지력 테스트가 진행 중입니다.\n"
     
     analysis += f"• **관련 뉴스 헤드라인**: {news_text}"
     return analysis
@@ -367,7 +367,7 @@ with tab1:
         
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("현재가", f"${latest['Close']:.2f}", f"{change_pct:.2f}%")
-        col2.metric("RSI (14)", f"{latest['RSI']:.1f}" if pd.notnull(latest['RSI']) else "N/A")
+        col2.metric("RSI (14)", f"{latest['RSI']:.2f}" if pd.notnull(latest['RSI']) else "N/A")
         col3.metric("ATR (변동성 폭)", f"${atr_val:.2f}")
         col4.metric("추천 1차 목표가", f"${target_1:.2f}", f"손절가: ${stop_loss:.2f}")
 
@@ -484,22 +484,27 @@ with tab3:
                 scan_results.append({
                     "종목명": name,
                     "티커": symbol,
-                    "현재가 ($)": round(last_row['Close'], 2),
-                    "RSI (14)": round(last_row['RSI'], 1) if pd.notnull(last_row['RSI']) else np.nan,
-                    "MDD (%)": round(last_row['MDD_Pct'], 2) if pd.notnull(last_row['MDD_Pct']) else np.nan,
+                    "현재가 ($)": last_row['Close'],
+                    "RSI (14)": last_row['RSI'] if pd.notnull(last_row['RSI']) else np.nan,
+                    "MDD (%)": last_row['MDD_Pct'] if pd.notnull(last_row['MDD_Pct']) else np.nan,
                     "매수 신호": "🚨 매수 포착" if is_buy else "대기"
                 })
 
                 if is_buy:
-                    captured_signals.append(f"• *{name} ({symbol})*: 현재가 ${last_row['Close']:.2f} (RSI: {last_row['RSI']:.1f})")
+                    captured_signals.append(f"• *{name} ({symbol})*: 현재가 ${last_row['Close']:.2f} (RSI: {last_row['RSI']:.2f})")
 
             progress_bar.progress((idx + 1) / len(items))
 
         summary_df = pd.DataFrame(scan_results)
 
         if not summary_df.empty:
+            # 소수점 둘째 자리까지 깔끔하게 포매팅 출력
             st.dataframe(
-                summary_df.style.apply(
+                summary_df.style.format({
+                    "현재가 ($)": "{:.2f}",
+                    "RSI (14)": "{:.2f}",
+                    "MDD (%)": "{:.2f}"
+                }).apply(
                     lambda row: ['background-color: #ffcccc' if row['매수 신호'] == "🚨 매수 포착" else '' for _ in row], axis=1
                 ),
                 use_container_width=True
