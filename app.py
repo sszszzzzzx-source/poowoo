@@ -389,7 +389,6 @@ def get_stock_news(ticker):
     except Exception:
         return []
 
-# 🔧 [보완] 옵션 체인 파싱 오류 방지 강화
 @st.cache_data(ttl=300, show_spinner=False)
 def get_option_chain_data(ticker, expiration_date=None):
     try:
@@ -402,7 +401,7 @@ def get_option_chain_data(ticker, expiration_date=None):
         selected_exp = expiration_date if (expiration_date and expiration_date in expirations) else expirations[0]
         opt = t.option_chain(selected_exp)
         return opt.calls, opt.puts, list(expirations)
-    except Exception as e:
+    except Exception:
         return None, None, []
 
 # -----------------------------------------------------------------------------
