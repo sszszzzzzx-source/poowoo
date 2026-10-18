@@ -255,4 +255,456 @@ st.sidebar.markdown("---")
 st.sidebar.subheader("📲 텔레그램 알림 설정")
 
 tg_token = st.sidebar.text_input("봇 토큰 (Bot Token)", type="password", key="tg_token_val")
-tg_chat_id = st.sidebar.text_input("채팅 ID (Chat ID)", key="tg_chat_id_val
+tg_chat_id = st.sidebar.text_input("채팅 ID (Chat ID)", key="tg_chat_id_val")
+
+if st.sidebar.button("🔔 텔레그램 연동 테스트", use_container_width=True):
+    success, msg = send_telegram_message(
+        tg_token, 
+        tg_chat_id, 
+        f"✅ *[Quant System]* 텔레그램 연동 성공!\n연동 시간: 정상 작동 중"
+    )
+    if success:
+        st.sidebar.success(msg)
+    else:
+        st.sidebar.error(msg)
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("📅 주요 거시경제 일정")
+st.sidebar.link_button("🗓️ Investing.com 경제캘린더", "https://kr.investing.com/economic-calendar/", use_container_width=True)
+
+# -----------------------------------------------------------------------------
+# [2. 데이터 수집 및 상승 다이버전스 감지 연산]
+# -----------------------------------------------------------------------------
+@st.cache_data(ttl=300, show_spinner=False)
+def load_and_analyze_data(ticker, interval, period, mdd_crit, rsi_crit, ma_filter):
+    df = yf.download(ticker, period=period, interval=interval, progress=False)
+    
+    if df.empty:
+        return df
+
+    if isinstance(df.columns, pd.MultiIndex):
+        df = df.xs(ticker, axis=1, level=1)
+
+    df['SMA20'] = df['Close'].rolling(window=20).mean()
+    df['SMA50'] = df['Close'].rolling(window=50).mean()
+    df['SMA120'] = df['Close'].rolling(window=120).mean()
+    df['SMA200'] = df['Close'].rolling(window=200).mean()
+
+    delta = df['Close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+    rs = gain / loss
+    df['RSI'] = 100 - (100 / (1 + rs))
+
+    std = df['Close'].rolling(window=20).std()
+    df['BB_Middle'] = df['SMA20']
+    df['BB_Upper'] = df['SMA20'] + (std * 2)
+    df['BB_Lower'] = df['SMA20'] - (std * 2)
+
+    try:
+        macd = ta.macd(df['Close'], fast=12, slow=26, signal=9)
+        if macd is not None and not macd.empty:
+            df['MACD'] = macd.iloc[:, 0]
+            df['MACD_Hist'] = macd.iloc[:, 1]
+            df['MACD_Signal'] = macd.iloc[:, 2]
+    except Exception:
+        exp12 = df['Close'].ewm(span=12, adjust=False).mean()
+        exp26 = df['Close'].ewm(span=26, adjust=False).mean()
+        df['MACD'] = exp12 - exp26
+        df['MACD_Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
+        df['MACD_Hist'] = df['MACD'] - df['MACD_Signal']
+
+    high_low = df['High'] - df['Low']
+    high_close = (df['High'] - df['Close'].shift()).abs()
+    low_close = (df['Low'] - df['Close'].shift()).abs()
+    tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+    df['ATR'] = tr.rolling(window=14).mean()
+
+    df['Rolling_Max'] = df['High'].rolling(window=30).max()
+    df['MDD_Pct'] = ((df['Close'] - df['Rolling_Max']) / df['Rolling_Max']) * 100
+
+    base_signal = (
+        (df['MDD_Pct'] <= -mdd_crit) & 
+        (df['Close'] <= df['BB_Lower'] * 1.01) & 
+        (df['RSI'] < rsi_threshold)
+    )
+
+    if ma_filter:
+        df['Buy_Signal'] = base_signal & (df['Close'] >= df['SMA20'])
+    else:
+        df['Buy_Signal'] = base_signal
+
+    # [오직 상승 다이버전스만 감지]
+    df['Bullish_Divergence'] = False
+
+    if len(df) > 10:
+        close_prev = df['Close'].shift(5)
+        rsi_prev = df['RSI'].shift(5)
+        
+        # 상승 다이버전스: 주가는 하락(현재가 < 5봉전 가격)했으나 RSI는 상승(현재RSI > 5봉전 RSI)하고 과매도 구간(45 미만)일 때
+        bull_div = (df['Close'] < close_prev) & (df['RSI'] > rsi_prev) & (df['RSI'] < 45)
+        df['Bullish_Divergence'] = bull_div
+
+    return df
+
+def run_backtest(df, target_pct=5.0, stop_pct=3.0, hold_bars=10):
+    signals = df[df['Buy_Signal'] | df['Bullish_Divergence']].index
+    results = []
+
+    for idx in signals:
+        loc = df.index.get_loc(idx)
+        if loc + hold_bars >= len(df):
+            continue
+        
+        buy_price = df.iloc[loc]['Close']
+        future_data = df.iloc[loc+1 : loc+1+hold_bars]
+        
+        max_price = future_data['High'].max()
+        min_price = future_data['Low'].min()
+        
+        max_return = ((max_price - buy_price) / buy_price) * 100
+        min_return = ((min_price - buy_price) / buy_price) * 100
+        
+        if max_return >= target_pct:
+            success = True
+        elif min_return <= -stop_pct:
+            success = False
+        else:
+            final_price = future_data.iloc[-1]['Close']
+            ret = ((final_price - buy_price) / buy_price) * 100
+            success = ret > 0
+
+        results.append({
+            "날짜": idx.strftime('%Y-%m-%d %H:%M') if hasattr(idx, 'strftime') else str(idx),
+            "매수가 ($)": buy_price,
+            "최고 수익률 (%)": max_return,
+            "최대 손실률 (%)": min_return,
+            "성공 여부": "✅ 성공" if success else "❌ 실패"
+        })
+    
+    return pd.DataFrame(results)
+
+@st.cache_data(ttl=600, show_spinner=False)
+def get_stock_news(ticker):
+    try:
+        t = yf.Ticker(ticker)
+        return t.news
+    except Exception:
+        return []
+
+@st.cache_data(ttl=600, show_spinner=False)
+def get_option_chain_data(ticker, expiration_date=None):
+    try:
+        t = yf.Ticker(ticker)
+        expirations = t.options
+        if not expirations:
+            return None, None, []
+        
+        selected_exp = expiration_date if expiration_date in expirations else expirations[0]
+        opt = t.option_chain(selected_exp)
+        return opt.calls, opt.puts, expirations
+    except Exception:
+        return None, None, []
+
+# -----------------------------------------------------------------------------
+# [3. 메인 대시보드 화면 구성 (탭 UI)]
+# -----------------------------------------------------------------------------
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    "📊 개별 종목 차트 & 뉴스", 
+    "📈 백테스팅 승률 검증",
+    "🚨 섹터 전체 종목 신호 스캐너", 
+    "📐 피보나치 되돌림 분석",
+    "📊 콜/풋 옵션 분석"
+])
+
+df = load_and_analyze_data(ticker_symbol, interval_code, period_code, mdd_threshold, rsi_threshold, use_ma_filter)
+
+# -----------------------------------------------------------------------------
+# TAB 1: 개별 종목 차트 & 뉴스
+# -----------------------------------------------------------------------------
+with tab1:
+    if df.empty:
+        st.error(f"'{ticker_symbol}'의 데이터를 불러오지 못했습니다. 선택하신 봉(타임프레임) 기간이나 티커 기호를 확인해 주세요.")
+    else:
+        latest = df.iloc[-1]
+        prev = df.iloc[-2] if len(df) > 1 else latest
+        change_pct = ((latest['Close'] - prev['Close']) / prev['Close']) * 100
+
+        atr_val = latest['ATR'] if pd.notnull(latest['ATR']) else (latest['Close'] * 0.02)
+        target_1 = latest['Close'] + (atr_val * 1.5)
+        target_2 = latest['Close'] + (atr_val * 3.0)
+        stop_loss = latest['Close'] - (atr_val * 1.5)
+
+        st.subheader(f"📌 {selected_stock_name} ({ticker_symbol}) - {selected_tf_name}")
+        
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("현재가", f"${latest['Close']:.2f}", f"{change_pct:.2f}%")
+        col2.metric("RSI (14)", f"{latest['RSI']:.2f}" if pd.notnull(latest['RSI']) else "N/A")
+        col3.metric("ATR (변동성 폭)", f"${atr_val:.2f}")
+        col4.metric("추천 1차 목표가", f"${target_1:.2f}", f"손절가: ${stop_loss:.2f}")
+
+        if latest['Buy_Signal']:
+            st.error(f"🚨 [단타 매수 신호 포착] -{mdd_threshold}% 하락 + 볼린저 하단 접근 + RSI {rsi_threshold} 미만 조건 충족!")
+        
+        if latest['Bullish_Divergence']:
+            st.info(f"🔵 **[RSI 상승 다이버전스 포착]** 주가는 하락했으나 RSI 지표가 반등하며 저점을 높이는 강세 다이버전스가 발생했습니다!")
+
+        news_items = get_stock_news(ticker_symbol)
+        analysis_msg = generate_market_analysis(selected_stock_name, ticker_symbol, df, news_items, change_pct)
+        st.info(analysis_msg)
+
+        fig = make_subplots(
+            rows=4, cols=1, 
+            shared_xaxes=True, 
+            vertical_spacing=0.03, 
+            row_heights=[0.5, 0.15, 0.17, 0.18],
+            subplot_titles=("캔들스틱 & 이동평균선 & 볼린저밴드", "거래량", "RSI 지표 (상승 다이버전스 포함)", "MACD 지표")
+        )
+
+        fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name="주가"), row=1, col=1)
+
+        colors = {'SMA20': 'orange', 'SMA50': 'blue', 'SMA120': 'green', 'SMA200': 'purple'}
+        for sma in ['SMA20', 'SMA50', 'SMA120', 'SMA200']:
+            if sma in df.columns:
+                fig.add_trace(go.Scatter(x=df.index, y=df[sma], mode='lines', name=sma, line=dict(color=colors[sma], width=1)), row=1, col=1)
+
+        fig.add_trace(go.Scatter(x=df.index, y=df['BB_Upper'], mode='lines', name='BB 상단', line=dict(color='gray', dash='dash')), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['BB_Lower'], mode='lines', name='BB 하단', line=dict(color='gray', dash='dash')), row=1, col=1)
+
+        buy_signals = df[df['Buy_Signal']]
+        if not buy_signals.empty:
+            fig.add_trace(go.Scatter(
+                x=buy_signals.index, y=buy_signals['Close'],
+                mode='markers', name='🚨 매수신호',
+                marker=dict(color='red', size=11, symbol='triangle-up')
+            ), row=1, col=1)
+
+        bull_div_df = df[df['Bullish_Divergence']]
+        if not bull_div_df.empty:
+            fig.add_trace(go.Scatter(
+                x=bull_div_df.index, y=bull_div_df['Close'],
+                mode='markers', name='🔵 상승다이버전스',
+                marker=dict(color='blue', size=12, symbol='star')
+            ), row=1, col=1)
+
+        fig.add_trace(go.Bar(x=df.index, y=df['Volume'], name="거래량", marker_color='gray'), row=2, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['RSI'], name="RSI", line=dict(color='purple')), row=3, col=1)
+        fig.add_hline(y=70, line_dash="dash", line_color="red", row=3, col=1)
+        fig.add_hline(y=30, line_dash="dash", line_color="green", row=3, col=1)
+
+        if 'MACD' in df.columns:
+            fig.add_trace(go.Scatter(x=df.index, y=df['MACD'], name="MACD", line=dict(color='blue')), row=4, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df['MACD_Signal'], name="Signal", line=dict(color='orange')), row=4, col=1)
+            fig.add_trace(go.Bar(x=df.index, y=df['MACD_Hist'], name="Histogram", marker_color='lightgray'), row=4, col=1)
+
+        fig.update_layout(height=950, xaxis_rangeslider_visible=False, template="plotly_white")
+        st.plotly_chart(fig, use_container_width=True)
+
+        csv_data = df.to_csv().encode('utf-8-sig')
+        st.download_button(label=f"📥 {ticker_symbol} 데이터 CSV 다운로드", data=csv_data, file_name=f"{ticker_symbol}_data.csv", mime="text/csv")
+
+        st.markdown("---")
+        st.subheader(f"📰 [{selected_stock_name} ({ticker_symbol})] 실시간 최신 뉴스 및 외부 링크")
+        c1, c2, c3 = st.columns(3)
+        c1.markdown(f"👉 [Investing.com 검색](https://www.investing.com/search/?q={ticker_symbol})")
+        c2.markdown(f"👉 [Yahoo Finance 바로가기](https://finance.yahoo.com/quote/{ticker_symbol})")
+        c3.markdown(f"👉 [Google Finance 바로가기](https://www.google.com/finance/quote/{ticker_symbol}:US)")
+
+        if news_items:
+            for item in news_items[:5]:
+                st.markdown(f"* **[{item.get('publisher', '뉴스')}]** [{item.get('title')}]({item.get('link', '#')})")
+
+# -----------------------------------------------------------------------------
+# TAB 2: 백테스팅 승률 검증 Engine
+# -----------------------------------------------------------------------------
+with tab2:
+    st.subheader(f"📈 [{selected_stock_name} ({ticker_symbol})] 지표 매수 신호 과거 승률 검증")
+    st.info("현재 설정된 매수 조건을 바탕으로 과거 매수 신호 발생 시 익절/손절 목표 달성률을 시뮬레이션합니다.")
+
+    b_col1, b_col2, b_col3 = st.columns(3)
+    target_p = b_col1.number_input("목표 익절 수익률 (%)", value=5.0, step=0.5)
+    stop_p = b_col2.number_input("목표 손절 수익률 (%)", value=3.0, step=0.5)
+    hold_b = b_col3.number_input("최대 보유 기간 (봉 개수)", value=10, step=1)
+
+    if st.button("🧪 백테스트 시뮬레이션 실행"):
+        bt_df = run_backtest(df, target_pct=target_p, stop_pct=stop_p, hold_bars=int(hold_b))
+        
+        if bt_df.empty:
+            st.warning("조회된 기간 내에 매수 신호 조건이 발생한 과거 이력이 없습니다. 조건을 완화해 보세요.")
+        else:
+            total_trades = len(bt_df)
+            win_trades = len(bt_df[bt_df['성공 여부'] == "✅ 성공"])
+            win_rate = (win_trades / total_trades) * 100
+            avg_max_ret = bt_df['최고 수익률 (%)'].mean()
+
+            m1, m2, m3 = st.columns(3)
+            m1.metric("총 매수 신호 발생 횟수", f"{total_trades}회")
+            m2.metric("백테스팅 승률", f"{win_rate:.1f}%")
+            m3.metric("평균 최고 상승률", f"+{avg_max_ret:.2f}%")
+
+            st.dataframe(bt_df.style.format({"매수가 ($)": "${:.2f}", "최고 수익률 (%)": "+{:.2f}%", "최대 손실률 (%)": "{:.2f}%"}), use_container_width=True, height=350)
+
+# -----------------------------------------------------------------------------
+# TAB 3: 섹터 전체 종목 신호 스캐너 & 텔레그램 연동 발송
+# -----------------------------------------------------------------------------
+with tab3:
+    st.subheader(f"🔎 [{selected_sector}] 섹터 내 전체 종목 실시간 매수 신호 스캔")
+
+    if st.button("🚀 섹터 전체 스캔 실행하기"):
+        scan_results = []
+        captured_signals = []
+        progress_bar = st.progress(0)
+        items = list(stock_dict.items())
+        
+        for idx, (name, symbol) in enumerate(items):
+            stock_df = load_and_analyze_data(symbol, interval_code, period_code, mdd_threshold, rsi_threshold, use_ma_filter)
+            
+            if not stock_df.empty:
+                last_row = stock_df.iloc[-1]
+                is_buy = last_row['Buy_Signal'] or last_row['Bullish_Divergence']
+                
+                signal_type = "🚨 매수 포착" if last_row['Buy_Signal'] else ("🔵 상승다이버전스" if last_row['Bullish_Divergence'] else "대기")
+
+                scan_results.append({
+                    "종목명": name,
+                    "티커": symbol,
+                    "현재가 ($)": last_row['Close'],
+                    "RSI (14)": last_row['RSI'] if pd.notnull(last_row['RSI']) else np.nan,
+                    "MDD (%)": last_row['MDD_Pct'] if pd.notnull(last_row['MDD_Pct']) else np.nan,
+                    "매수 신호": signal_type
+                })
+
+                if is_buy:
+                    captured_signals.append(f"• *{name} ({symbol})*: 현재가 ${last_row['Close']:.2f} (RSI: {last_row['RSI']:.2f}) [{signal_type}]")
+
+            progress_bar.progress((idx + 1) / len(items))
+
+        summary_df = pd.DataFrame(scan_results)
+
+        if not summary_df.empty:
+            st.dataframe(
+                summary_df.style.format({
+                    "현재가 ($)": "{:.2f}",
+                    "RSI (14)": "{:.2f}",
+                    "MDD (%)": "{:.2f}"
+                }).apply(
+                    lambda row: ['background-color: #ffcccc' if '매수' in row['매수 신호'] else ('background-color: #cce5ff' if '상승다이버전스' in row['매수 신호'] else '') for _ in row], axis=1
+                ),
+                use_container_width=True,
+                height=400
+            )
+
+            if captured_signals and tg_token and tg_chat_id:
+                msg_body = f"🚨 *[상승 다이버전스 및 매수 포착 알림]*\n\n*분야*: {selected_sector} ({selected_tf_name})\n\n" + "\n".join(captured_signals)
+                send_telegram_message(tg_token, tg_chat_id, msg_body)
+                st.success("📱 신호 포착 종목 정보를 텔레그램으로 전송했습니다!")
+
+# -----------------------------------------------------------------------------
+# TAB 4: 피보나치 되돌림 분석
+# -----------------------------------------------------------------------------
+with tab4:
+    st.subheader(f"📐 {selected_stock_name} ({ticker_symbol}) - 피보나치 되돌림 구간")
+    if not df.empty:
+        high_val = df['High'].max()
+        low_val = df['Low'].min()
+        diff = high_val - low_val
+
+        fib_levels = {
+            "0.0% (최고점)": high_val,
+            "23.6% 되돌림": high_val - 0.236 * diff,
+            "38.2% 되돌림": high_val - 0.382 * diff,
+            "50.0% 되돌림 (중요 지지)": high_val - 0.5 * diff,
+            "61.8% 되돌림 (황금 비율)": high_val - 0.618 * diff,
+            "78.6% 되돌림": high_val - 0.786 * diff,
+            "100.0% (최저점)": low_val
+        }
+
+        st.dataframe(
+            pd.DataFrame(list(fib_levels.items()), columns=["피보나치 레벨", "목표 가격 ($)"]).style.format({"목표 가격 ($)": "${:.2f}"}),
+            use_container_width=True,
+            height=300
+        )
+
+# -----------------------------------------------------------------------------
+# TAB 5: 콜 / 풋 옵션 체인 분석
+# -----------------------------------------------------------------------------
+with tab5:
+    st.subheader(f"📊 {selected_stock_name} ({ticker_symbol}) - 콜/풋 옵션 체인 분석")
+
+    calls, puts, exp_dates = get_option_chain_data(ticker_symbol)
+
+    if not exp_dates:
+        st.warning(f"'{ticker_symbol}' 종목은 거래 가능한 옵션 시장 데이터가 존재하지 않거나 제공되지 않는 티커입니다.")
+    else:
+        selected_exp = st.selectbox("📅 옵션 만기일 선택", exp_dates)
+        calls, puts, _ = get_option_chain_data(ticker_symbol, selected_exp)
+
+        if calls is not None and puts is not None:
+            call_vol = calls['volume'].sum() if 'volume' in calls.columns else 0
+            put_vol = puts['volume'].sum() if 'volume' in puts.columns else 0
+            pcr_vol = (put_vol / call_vol) if call_vol > 0 else 0.0
+
+            call_oi = calls['openInterest'].sum() if 'openInterest' in calls.columns else 0
+            put_oi = puts['openInterest'].sum() if 'openInterest' in puts.columns else 0
+            pcr_oi = (put_oi / call_oi) if call_oi > 0 else 0.0
+
+            col_o1, col_o2, col_o3, col_o4 = st.columns(4)
+            col_o1.metric("총 콜옵션 거래량", f"{int(call_vol):,}계약")
+            col_o2.metric("총 풋옵션 거래량", f"{int(put_vol):,}계약")
+            col_o3.metric("거래량 기준 PCR (Put/Call)", f"{pcr_vol:.2f}", help="1.0 이상이면 하방 압력 강함, 0.7 이하면 상방 기대감 높음")
+            col_o4.metric("미결제약정 기준 PCR", f"{pcr_oi:.2f}")
+
+            st.markdown("---")
+
+            def clean_option_df(opt_df):
+                cols = {
+                    'strike': '행사가 ($)',
+                    'lastPrice': '체결가 ($)',
+                    'bid': '매수호가 ($)',
+                    'ask': '매도호가 ($)',
+                    'change': '변동 ($)',
+                    'impliedVolatility': '내재변동성 (IV)',
+                    'volume': '거래량',
+                    'openInterest': '미결제약정'
+                }
+                present_cols = [c for c in cols.keys() if c in opt_df.columns]
+                res = opt_df[present_cols].rename(columns=cols)
+                if '내재변동성 (IV)' in res.columns:
+                    res['내재변동성 (IV)'] = (res['내재변동성 (IV)'] * 100).round(2).astype(str) + '%'
+                return res
+
+            c_tab1, c_tab2 = st.tabs(["🟢 콜옵션 (Call Options)", "🔴 풋옵션 (Put Options)"])
+
+            with c_tab1:
+                st.markdown("### 🟢 Call Options (상승 배팅)")
+                formatted_calls = clean_option_df(calls)
+                st.dataframe(
+                    formatted_calls.style.format({
+                        '행사가 ($)': '${:.2f}',
+                        '체결가 ($)': '${:.2f}',
+                        '매수호가 ($)': '${:.2f}',
+                        '매도호가 ($)': '${:.2f}',
+                        '변동 ($)': '{:+.2f}',
+                        '거래량': '{:,.0f}',
+                        '미결제약정': '{:,.0f}'
+                    }),
+                    use_container_width=True,
+                    height=450
+                )
+
+            with c_tab2:
+                st.markdown("### 🔴 Put Options (하락 배팅/헤지)")
+                formatted_puts = clean_option_df(puts)
+                st.dataframe(
+                    formatted_puts.style.format({
+                        '행사가 ($)': '${:.2f}',
+                        '체결가 ($)': '${:.2f}',
+                        '매수호가 ($)': '${:.2f}',
+                        '매도호가 ($)': '${:.2f}',
+                        '변동 ($)': '{:+.2f}',
+                        '거래량': '{:,.0f}',
+                        '미결제약정': '{:,.0f}'
+                    }),
+                    use_container_width=True,
+                    height=450
+                )
