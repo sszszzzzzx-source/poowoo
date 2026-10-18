@@ -35,7 +35,7 @@ st.markdown("""
 # -----------------------------------------------------------------------------
 # [비밀번호 인증 시스템]
 # -----------------------------------------------------------------------------
-CORRECT_PASSWORD = "1234"  # 비밀번호
+CORRECT_PASSWORD = "1234"
 
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
@@ -273,7 +273,7 @@ st.sidebar.subheader("📅 주요 거시경제 일정")
 st.sidebar.link_button("🗓️ Investing.com 경제캘린더", "https://kr.investing.com/economic-calendar/", use_container_width=True)
 
 # -----------------------------------------------------------------------------
-# [2. 데이터 수집 및 캐싱 최적화]
+# [2. 데이터 수집 및 다이버전스 감지 지표 연산]
 # -----------------------------------------------------------------------------
 @st.cache_data(ttl=300, show_spinner=False)
 def load_and_analyze_data(ticker, interval, period, mdd_crit, rsi_crit, ma_filter):
@@ -323,10 +323,11 @@ def load_and_analyze_data(ticker, interval, period, mdd_crit, rsi_crit, ma_filte
     df['Rolling_Max'] = df['High'].rolling(window=30).max()
     df['MDD_Pct'] = ((df['Close'] - df['Rolling_Max']) / df['Rolling_Max']) * 100
 
+    # 기존 단타 매수 조건
     base_signal = (
         (df['MDD_Pct'] <= -mdd_crit) & 
         (df['Close'] <= df['BB_Lower'] * 1.01) & 
-        (df['RSI'] < rsi_crit)
+        (df['RSI'] < rsi_threshold)
     )
 
     if ma_filter:
@@ -334,10 +335,27 @@ def load_and_analyze_data(ticker, interval, period, mdd_crit, rsi_crit, ma_filte
     else:
         df['Buy_Signal'] = base_signal
 
+    # [추가] RSI 다이버전스 감지 로직 (상승 / 하락)
+    df['Bullish_Divergence'] = False
+    df['Bearish_Divergence'] = False
+
+    if len(df) > 10:
+        # 최근 5개 봉 내 저점/고점 비교를 위한 지표 계산
+        close_prev = df['Close'].shift(5)
+        rsi_prev = df['RSI'].shift(5)
+        
+        # 상승 다이버전스: 주가는 하락(현재가 < 5봉전 가격)했으나 RSI는 상승(현재RSI > 5봉전 RSI)하고 과매도 구간(50 미만)일 때
+        bull_div = (df['Close'] < close_prev) & (df['RSI'] > rsi_prev) & (df['RSI'] < 45)
+        df['Bullish_Divergence'] = bull_div
+
+        # 하락 다이버전스: 주가는 상승(현재가 > 5봉전 가격)했으나 RSI는 하락(현재RSI < 5봉전 RSI)하고 과매수 구간(55 이상)일 때
+        bear_div = (df['Close'] > close_prev) & (df['RSI'] < rsi_prev) & (df['RSI'] > 55)
+        df['Bearish_Divergence'] = bear_div
+
     return df
 
 def run_backtest(df, target_pct=5.0, stop_pct=3.0, hold_bars=10):
-    signals = df[df['Buy_Signal']].index
+    signals = df[df['Buy_Signal'] | df['Bullish_Divergence']].index
     results = []
 
     for idx in signals:
@@ -432,8 +450,15 @@ with tab1:
         col3.metric("ATR (변동성 폭)", f"${atr_val:.2f}")
         col4.metric("추천 1차 목표가", f"${target_1:.2f}", f"손절가: ${stop_loss:.2f}")
 
+        # 매수/다이버전스 신호 알림 박스 출력
         if latest['Buy_Signal']:
             st.error(f"🚨 [단타 매수 신호 포착] -{mdd_threshold}% 하락 + 볼린저 하단 접근 + RSI {rsi_threshold} 미만 조건 충족!")
+        
+        if latest['Bullish_Divergence']:
+            st.info(f"🔵 **[RSI 상승 다이버전스 포착]** 주가는 하락했으나 RSI 지표가 반등하며 저점을 높이는 강세 다이버전스가 발생했습니다!")
+
+        if latest['Bearish_Divergence']:
+            st.warning(f"⚠️ **[RSI 하락 다이버전스 포착]** 주가는 상승했으나 RSI 지표가 약화되는 약세 다이버전스가 발생했습니다.")
 
         news_items = get_stock_news(ticker_symbol)
         analysis_msg = generate_market_analysis(selected_stock_name, ticker_symbol, df, news_items, change_pct)
@@ -444,7 +469,7 @@ with tab1:
             shared_xaxes=True, 
             vertical_spacing=0.03, 
             row_heights=[0.5, 0.15, 0.17, 0.18],
-            subplot_titles=("캔들스틱 & 이동평균선 & 볼린저밴드", "거래량", "RSI 지표", "MACD 지표")
+            subplot_titles=("캔들스틱 & 이동평균선 & 볼린저밴드", "거래량", "RSI 지표 (다이버전스 포함)", "MACD 지표")
         )
 
         fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name="주가"), row=1, col=1)
@@ -463,6 +488,15 @@ with tab1:
                 x=buy_signals.index, y=buy_signals['Close'],
                 mode='markers', name='🚨 매수신호',
                 marker=dict(color='red', size=11, symbol='triangle-up')
+            ), row=1, col=1)
+
+        # [추가] 차트에 파란색 상승 다이버전스 마커 표시
+        bull_div_df = df[df['Bullish_Divergence']]
+        if not bull_div_df.empty:
+            fig.add_trace(go.Scatter(
+                x=bull_div_df.index, y=bull_div_df['Close'],
+                mode='markers', name='🔵 상승다이버전스',
+                marker=dict(color='blue', size=12, symbol='star')
             ), row=1, col=1)
 
         fig.add_trace(go.Bar(x=df.index, y=df['Volume'], name="거래량", marker_color='gray'), row=2, col=1)
@@ -539,19 +573,21 @@ with tab3:
             
             if not stock_df.empty:
                 last_row = stock_df.iloc[-1]
-                is_buy = last_row['Buy_Signal']
+                is_buy = last_row['Buy_Signal'] or last_row['Bullish_Divergence']
                 
+                signal_type = "🚨 매수 포착" if last_row['Buy_Signal'] else ("🔵 다이버전스" if last_row['Bullish_Divergence'] else "대기")
+
                 scan_results.append({
                     "종목명": name,
                     "티커": symbol,
                     "현재가 ($)": last_row['Close'],
                     "RSI (14)": last_row['RSI'] if pd.notnull(last_row['RSI']) else np.nan,
                     "MDD (%)": last_row['MDD_Pct'] if pd.notnull(last_row['MDD_Pct']) else np.nan,
-                    "매수 신호": "🚨 매수 포착" if is_buy else "대기"
+                    "매수 신호": signal_type
                 })
 
                 if is_buy:
-                    captured_signals.append(f"• *{name} ({symbol})*: 현재가 ${last_row['Close']:.2f} (RSI: {last_row['RSI']:.2f})")
+                    captured_signals.append(f"• *{name} ({symbol})*: 현재가 ${last_row['Close']:.2f} (RSI: {last_row['RSI']:.2f}) [{signal_type}]")
 
             progress_bar.progress((idx + 1) / len(items))
 
@@ -564,16 +600,16 @@ with tab3:
                     "RSI (14)": "{:.2f}",
                     "MDD (%)": "{:.2f}"
                 }).apply(
-                    lambda row: ['background-color: #ffcccc' if row['매수 신호'] == "🚨 매수 포착" else '' for _ in row], axis=1
+                    lambda row: ['background-color: #ffcccc' if '매수' in row['매수 신호'] else ('background-color: #cce5ff' if '다이버전스' in row['매수 신호'] else '') for _ in row], axis=1
                 ),
                 use_container_width=True,
                 height=400
             )
 
             if captured_signals and tg_token and tg_chat_id:
-                msg_body = f"🚨 *[매수 신호 포착 알림]*\n\n*분야*: {selected_sector} ({selected_tf_name})\n\n" + "\n".join(captured_signals)
+                msg_body = f"🚨 *[매수 신호 및 다이버전스 포착 알림]*\n\n*분야*: {selected_sector} ({selected_tf_name})\n\n" + "\n".join(captured_signals)
                 send_telegram_message(tg_token, tg_chat_id, msg_body)
-                st.success("📱 매수 포착 종목 정보를 텔레그램으로 전송했습니다!")
+                st.success("📱 신호 포착 종목 정보를 텔레그램으로 전송했습니다!")
 
 # -----------------------------------------------------------------------------
 # TAB 4: 피보나치 되돌림 분석
