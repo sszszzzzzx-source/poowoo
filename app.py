@@ -159,7 +159,7 @@ timeframe_map = {
     "최근 5년 일봉 (5 Years)": ("1d", "5y"),
     "4시간봉 (4 Hours - 최근 60일)": ("60m", "60d"),
     "1시간봉 (1 Hour - 최근 60일)": ("60m", "60d"),
-    "10분봉 (10 Mins - 최근 7일)": ("10m", "5d"),
+    "10분봉 (10 Mins - 최근 7일)": ("10m", "7d"),
     "5분봉 (5 Mins - 최근 7일)": ("5m", "7d")
 }
 
@@ -341,9 +341,9 @@ def get_stock_news(ticker):
 # -----------------------------------------------------------------------------
 tab1, tab2, tab3, tab4 = st.tabs([
     "📊 개별 종목 차트 & 뉴스", 
-    "📈 백테스팅 승률 검증",
-    "🚨 섹터 전체 종목 신호 스캐너", 
-    "📐 피보나치 되돌림 분석"
+    "📈 백테스팅 검증",
+    "🚨 신호 스캐너", 
+    "📐 피보나치 되돌림"
 ])
 
 df = load_and_analyze_data(ticker_symbol, interval_code, period_code, mdd_threshold, rsi_threshold, use_ma_filter)
