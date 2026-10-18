@@ -8,13 +8,32 @@ import pandas_ta_classic as ta     # 기술적 지표 계산 라이브러리
 import requests          # 텔레그램 API 전송을 위한 라이브러리
 
 # -----------------------------------------------------------------------------
-# [페이지 기본 설정]
+# [페이지 기본 설정 및 CSS 여백 압축 스타일 적용]
 # -----------------------------------------------------------------------------
 st.set_page_config(
     page_title="Quant Technical Analysis & Scanner Dashboard",
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+# 표 및 탭 간의 불필요한 넓은 여백을 좁히는 커스텀 CSS 주입
+st.markdown("""
+    <style>
+        /* 데이터프레임(표) 내부 셀 패딩 및 간격 축소 */
+        .stDataFrame td, .stDataFrame th {
+            padding-left: 6px !important;
+            padding-right: 6px !important;
+            padding-top: 4px !important;
+            padding-bottom: 4px !important;
+            font-size: 14px !important;
+        }
+        /* 메인 컨테이너 위아래 여백 압축 */
+        .block-container {
+            padding-top: 2rem;
+            padding-bottom: 2rem;
+        }
+    </style>
+""", unsafe_allow_html=True)
 
 st.title("📈 퀀트 기술적 분석 & 고급 매수 신호 시스템")
 
@@ -337,7 +356,6 @@ def get_stock_news(ticker):
 
 @st.cache_data(ttl=600)
 def get_option_chain_data(ticker, expiration_date=None):
-    """야후 파이낸스에서 옵션 체인 데이터 수집"""
     try:
         t = yf.Ticker(ticker)
         expirations = t.options
@@ -476,7 +494,7 @@ with tab2:
             m2.metric("백테스팅 승률", f"{win_rate:.1f}%")
             m3.metric("평균 최고 상승률", f"+{avg_max_ret:.2f}%")
 
-            st.dataframe(bt_df.style.format({"매수가 ($)": "${:.2f}", "최고 수익률 (%)": "+{:.2f}%", "최대 손실률 (%)": "{:.2f}%"}), use_container_width=True)
+            st.dataframe(bt_df.style.format({"매수가 ($)": "${:.2f}", "최고 수익률 (%)": "+{:.2f}%", "최대 손실률 (%)": "{:.2f}%"}), use_container_width=True, height=350)
 
 # -----------------------------------------------------------------------------
 # TAB 3: 섹터 전체 종목 신호 스캐너 & 텔레그램 연동 발송
@@ -522,7 +540,8 @@ with tab3:
                 }).apply(
                     lambda row: ['background-color: #ffcccc' if row['매수 신호'] == "🚨 매수 포착" else '' for _ in row], axis=1
                 ),
-                use_container_width=True
+                use_container_width=True,
+                height=400
             )
 
             if captured_signals and tg_token and tg_chat_id:
@@ -550,7 +569,11 @@ with tab4:
             "100.0% (최저점)": low_val
         }
 
-        st.table(pd.DataFrame(list(fib_levels.items()), columns=["피보나치 레벨", "목표 가격 ($)"]).style.format({"목표 가격 ($)": "${:.2f}"}))
+        st.dataframe(
+            pd.DataFrame(list(fib_levels.items()), columns=["피보나치 레벨", "목표 가격 ($)"]).style.format({"목표 가격 ($)": "${:.2f}"}),
+            use_container_width=True,
+            height=300
+        )
 
 # -----------------------------------------------------------------------------
 # TAB 5: 콜 / 풋 옵션 체인 분석
@@ -558,7 +581,6 @@ with tab4:
 with tab5:
     st.subheader(f"📊 {selected_stock_name} ({ticker_symbol}) - 콜/풋 옵션 체인 분석")
 
-    # 옵션 데이터 불러오기
     calls, puts, exp_dates = get_option_chain_data(ticker_symbol)
 
     if not exp_dates:
@@ -568,7 +590,6 @@ with tab5:
         calls, puts, _ = get_option_chain_data(ticker_symbol, selected_exp)
 
         if calls is not None and puts is not None:
-            # 주요 요약 지표 계산
             call_vol = calls['volume'].sum() if 'volume' in calls.columns else 0
             put_vol = puts['volume'].sum() if 'volume' in puts.columns else 0
             pcr_vol = (put_vol / call_vol) if call_vol > 0 else 0.0
@@ -585,7 +606,6 @@ with tab5:
 
             st.markdown("---")
 
-            # 컬럼 정리 함수
             def clean_option_df(opt_df):
                 cols = {
                     'strike': '행사가 ($)',
@@ -612,27 +632,4 @@ with tab5:
                     formatted_calls.style.format({
                         '행사가 ($)': '${:.2f}',
                         '체결가 ($)': '${:.2f}',
-                        '매수호가 ($)': '${:.2f}',
-                        '매도호가 ($)': '${:.2f}',
-                        '변동 ($)': '{:+.2f}',
-                        '거래량': '{:,.0f}',
-                        '미결제약정': '{:,.0f}'
-                    }),
-                    use_container_width=True
-                )
-
-            with c_tab2:
-                st.markdown("### 🔴 Put Options (하락 배팅/헤지)")
-                formatted_puts = clean_option_df(puts)
-                st.dataframe(
-                    formatted_puts.style.format({
-                        '행사가 ($)': '${:.2f}',
-                        '체결가 ($)': '${:.2f}',
-                        '매수호가 ($)': '${:.2f}',
-                        '매도호가 ($)': '${:.2f}',
-                        '변동 ($)': '{:+.2f}',
-                        '거래량': '{:,.0f}',
-                        '미결제약정': '{:,.0f}'
-                    }),
-                    use_container_width=True
-                )
+                        '매수호가 ($)': '${:.2f
