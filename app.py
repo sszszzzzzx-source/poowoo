@@ -16,7 +16,6 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# 표 및 탭 간의 불필요한 넓은 여백을 좁히는 커스텀 CSS 주입
 st.markdown("""
     <style>
         .stDataFrame td, .stDataFrame th {
@@ -36,7 +35,7 @@ st.markdown("""
 # -----------------------------------------------------------------------------
 # [비밀번호 인증 시스템]
 # -----------------------------------------------------------------------------
-CORRECT_PASSWORD = "5882"  # 👈 이곳의 숫자를 원하시는 비밀번호로 변경하세요!
+CORRECT_PASSWORD = "1234"  # 비밀번호
 
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
@@ -55,10 +54,10 @@ if not st.session_state.authenticated:
         else:
             st.error("⚠️ 비밀번호가 틀렸습니다. 다시 확인해 주세요.")
     
-    st.stop()  # 비밀번호가 일치하기 전에는 아래 메인 코드가 실행되지 않도록 차단
+    st.stop()
 
 # =============================================================================
-# [이 아래부터는 로그인이 성공했을 때만 보이는 메인 대시보드 영역]
+# [메인 대시보드 영역]
 # =============================================================================
 
 st.title("📈 퀀트 기술적 분석 & 고급 매수 신호 시스템")
@@ -220,7 +219,6 @@ timeframe_map = {
 selected_tf_name = st.sidebar.selectbox("3. 차트 타임프레임 (봉) 선택", list(timeframe_map.keys()))
 interval_code, period_code = timeframe_map[selected_tf_name]
 
-# 티커 직접 추가
 st.sidebar.markdown("---")
 st.sidebar.subheader("➕ 원하는 티커 추가하기")
 
@@ -253,7 +251,6 @@ mdd_threshold = st.sidebar.slider("이전 고점 대비 하락 폭 (MDD %)", min
 rsi_threshold = st.sidebar.slider("RSI 상한 기준 (이하)", min_value=20, max_value=50, value=42, step=1)
 use_ma_filter = st.sidebar.checkbox("20일선 위에 위치한 정배열 종목만 매수신호 허용", value=False)
 
-# 텔레그램 설정
 st.sidebar.markdown("---")
 st.sidebar.subheader("📲 텔레그램 알림 설정")
 
@@ -276,9 +273,9 @@ st.sidebar.subheader("📅 주요 거시경제 일정")
 st.sidebar.link_button("🗓️ Investing.com 경제캘린더", "https://kr.investing.com/economic-calendar/", use_container_width=True)
 
 # -----------------------------------------------------------------------------
-# [2. 데이터 수집 및 기술적 지표 연산]
+# [2. 데이터 수집 및 캐싱 최적화]
 # -----------------------------------------------------------------------------
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=300, show_spinner=False)
 def load_and_analyze_data(ticker, interval, period, mdd_crit, rsi_crit, ma_filter):
     df = yf.download(ticker, period=period, interval=interval, progress=False)
     
@@ -288,26 +285,22 @@ def load_and_analyze_data(ticker, interval, period, mdd_crit, rsi_crit, ma_filte
     if isinstance(df.columns, pd.MultiIndex):
         df = df.xs(ticker, axis=1, level=1)
 
-    # 1. 이동평균선
     df['SMA20'] = df['Close'].rolling(window=20).mean()
     df['SMA50'] = df['Close'].rolling(window=50).mean()
     df['SMA120'] = df['Close'].rolling(window=120).mean()
     df['SMA200'] = df['Close'].rolling(window=200).mean()
 
-    # 2. RSI (14)
     delta = df['Close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
     rs = gain / loss
     df['RSI'] = 100 - (100 / (1 + rs))
 
-    # 3. 볼린저밴드 (20, 2)
     std = df['Close'].rolling(window=20).std()
     df['BB_Middle'] = df['SMA20']
     df['BB_Upper'] = df['SMA20'] + (std * 2)
     df['BB_Lower'] = df['SMA20'] - (std * 2)
 
-    # 4. MACD (12, 26, 9)
     try:
         macd = ta.macd(df['Close'], fast=12, slow=26, signal=9)
         if macd is not None and not macd.empty:
@@ -321,14 +314,12 @@ def load_and_analyze_data(ticker, interval, period, mdd_crit, rsi_crit, ma_filte
         df['MACD_Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
         df['MACD_Hist'] = df['MACD'] - df['MACD_Signal']
 
-    # 5. ATR
     high_low = df['High'] - df['Low']
     high_close = (df['High'] - df['Close'].shift()).abs()
     low_close = (df['Low'] - df['Close'].shift()).abs()
     tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
     df['ATR'] = tr.rolling(window=14).mean()
 
-    # 6. MDD 및 매수 신호
     df['Rolling_Max'] = df['High'].rolling(window=30).max()
     df['MDD_Pct'] = ((df['Close'] - df['Rolling_Max']) / df['Rolling_Max']) * 100
 
@@ -382,7 +373,7 @@ def run_backtest(df, target_pct=5.0, stop_pct=3.0, hold_bars=10):
     
     return pd.DataFrame(results)
 
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=600, show_spinner=False)
 def get_stock_news(ticker):
     try:
         t = yf.Ticker(ticker)
@@ -390,7 +381,7 @@ def get_stock_news(ticker):
     except Exception:
         return []
 
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=600, show_spinner=False)
 def get_option_chain_data(ticker, expiration_date=None):
     try:
         t = yf.Ticker(ticker)
@@ -444,7 +435,6 @@ with tab1:
         if latest['Buy_Signal']:
             st.error(f"🚨 [단타 매수 신호 포착] -{mdd_threshold}% 하락 + 볼린저 하단 접근 + RSI {rsi_threshold} 미만 조건 충족!")
 
-        # 🤖 AI 실시간 등락 요인 및 시황 분석 박스
         news_items = get_stock_news(ticker_symbol)
         analysis_msg = generate_market_analysis(selected_stock_name, ticker_symbol, df, news_items, change_pct)
         st.info(analysis_msg)
