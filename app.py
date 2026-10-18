@@ -632,4 +632,29 @@ with tab5:
                     formatted_calls.style.format({
                         '행사가 ($)': '${:.2f}',
                         '체결가 ($)': '${:.2f}',
-                        '매수호가 ($)': '${:.2f
+                        '매수호가 ($)': '${:.2f}',
+                        '매도호가 ($)': '${:.2f}',
+                        '변동 ($)': '{:+.2f}',
+                        '거래량': '{:,.0f}',
+                        '미결제약정': '{:,.0f}'
+                    }),
+                    use_container_width=True,
+                    height=450
+                )
+
+            with c_tab2:
+                st.markdown("### 🔴 Put Options (하락 배팅/헤지)")
+                formatted_puts = clean_option_df(puts)
+                st.dataframe(
+                    formatted_puts.style.format({
+                        '행사가 ($)': '${:.2f}',
+                        '체결가 ($)': '${:.2f}',
+                        '매수호가 ($)': '${:.2f}',
+                        '매도호가 ($)': '${:.2f}',
+                        '변동 ($)': '{:+.2f}',
+                        '거래량': '{:,.0f}',
+                        '미결제약정': '{:,.0f}'
+                    }),
+                    use_container_width=True,
+                    height=450
+                )
