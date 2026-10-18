@@ -5,7 +5,7 @@ import numpy as np       # 수학 연산 라이브러리
 import plotly.graph_objects as go  # 차트 시각화 라이브러리
 from plotly.subplots import make_subplots
 import pandas_ta_classic as ta     # 기술적 지표 계산 라이브러리
-import requests          # 텔레그램 API 전송을 위한 라이브러리
+import requests          # API 전송을 위한 라이브러리
 
 # -----------------------------------------------------------------------------
 # [페이지 기본 설정 및 CSS 여백 압축 스타일 적용]
@@ -19,7 +19,6 @@ st.set_page_config(
 # 표 및 탭 간의 불필요한 넓은 여백을 좁히는 커스텀 CSS 주입
 st.markdown("""
     <style>
-        /* 데이터프레임(표) 내부 셀 패딩 및 간격 축소 */
         .stDataFrame td, .stDataFrame th {
             padding-left: 6px !important;
             padding-right: 6px !important;
@@ -27,7 +26,6 @@ st.markdown("""
             padding-bottom: 4px !important;
             font-size: 14px !important;
         }
-        /* 메인 컨테이너 위아래 여백 압축 */
         .block-container {
             padding-top: 2rem;
             padding-bottom: 2rem;
@@ -89,10 +87,20 @@ def generate_market_analysis(stock_name, ticker, df, news_items, change_pct):
     return analysis
 
 # -----------------------------------------------------------------------------
-# [1. 분야별 하위 종목 (티커) 세션 상태 초기화 및 관리]
+# [1. 분야별 하위 종목 (티커) 세션 상태 초기화 및 관리 (바이낸스 코인 세션 추가)]
 # -----------------------------------------------------------------------------
 if "sector_stocks" not in st.session_state:
     st.session_state.sector_stocks = {
+        "🪙 바이낸스 코인": {
+            "Bitcoin (비트코인)": "BTC-USD",
+            "Ethereum (이더리움)": "ETH-USD",
+            "Ripple (리플)": "XRP-USD",
+            "Solana (솔라나)": "SOL-USD",
+            "Dogecoin (도지코인)": "DOGE-USD",
+            "Cardano (에이다)": "ADA-USD",
+            "Avalanche (아발란체)": "AVAX-USD",
+            "Chainlink (체인링크)": "LINK-USD"
+        },
         "양자컴퓨터": {
             "QTUM (Defiance 양자컴퓨터 ETF)": "QTUM",
             "DFNC (Defiance Quantum ETF)": "DFNC",
@@ -189,8 +197,8 @@ st.sidebar.markdown("---")
 st.sidebar.subheader("➕ 원하는 티커 추가하기")
 
 add_sector = st.sidebar.selectbox("추가 대상 분야", list(st.session_state.sector_stocks.keys()), key="add_sec_box")
-new_name = st.sidebar.text_input("종목 이름 (예: 코인베이스)", key="new_stock_name")
-new_ticker = st.sidebar.text_input("야후 티커 (예: COIN)", key="new_stock_ticker")
+new_name = st.sidebar.text_input("종목 이름 (예: 수이 코인)", key="new_stock_name")
+new_ticker = st.sidebar.text_input("야후/코인 티커 (예: SUI-USD)", key="new_stock_ticker")
 
 if st.sidebar.button("🚀 분야에 종목 추가", use_container_width=True):
     if new_name and new_ticker:
@@ -240,7 +248,7 @@ st.sidebar.subheader("📅 주요 거시경제 일정")
 st.sidebar.link_button("🗓️ Investing.com 경제캘린더", "https://kr.investing.com/economic-calendar/", use_container_width=True)
 
 # -----------------------------------------------------------------------------
-# [2. 데이터 수집 및 기술적 지표 연산]
+# [2. 데이터 수집 및 기술적 지표 연산 (동일 유지)]
 # -----------------------------------------------------------------------------
 @st.cache_data(ttl=300)
 def load_and_analyze_data(ticker, interval, period, mdd_crit, rsi_crit, ma_filter):
