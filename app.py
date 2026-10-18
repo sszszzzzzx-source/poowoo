@@ -334,11 +334,14 @@ def load_and_analyze_data(ticker, interval, period, mdd_crit, rsi_crit, ma_filte
     else:
         df['Buy_Signal'] = base_signal
 
+    # [오직 상승 다이버전스만 감지]
     df['Bullish_Divergence'] = False
 
     if len(df) > 10:
         close_prev = df['Close'].shift(5)
         rsi_prev = df['RSI'].shift(5)
+        
+        # 상승 다이버전스: 주가는 하락(현재가 < 5봉전 가격)했으나 RSI는 상승(현재RSI > 5봉전 RSI)하고 과매도 구간(45 미만)일 때
         bull_div = (df['Close'] < close_prev) & (df['RSI'] > rsi_prev) & (df['RSI'] < 45)
         df['Bullish_Divergence'] = bull_div
 
@@ -389,18 +392,17 @@ def get_stock_news(ticker):
     except Exception:
         return []
 
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=600, show_spinner=False)
 def get_option_chain_data(ticker, expiration_date=None):
     try:
         t = yf.Ticker(ticker)
-        expirations = getattr(t, 'options', None)
-        
-        if not expirations or len(expirations) == 0:
+        expirations = t.options
+        if not expirations:
             return None, None, []
         
-        selected_exp = expiration_date if (expiration_date and expiration_date in expirations) else expirations[0]
+        selected_exp = expiration_date if expiration_date in expirations else expirations[0]
         opt = t.option_chain(selected_exp)
-        return opt.calls, opt.puts, list(expirations)
+        return opt.calls, opt.puts, expirations
     except Exception:
         return None, None, []
 
@@ -632,7 +634,7 @@ with tab5:
     calls, puts, exp_dates = get_option_chain_data(ticker_symbol)
 
     if not exp_dates:
-        st.warning(f"'{ticker_symbol}' 종목은 거래 가능한 옵션 시장 데이터가 존재하지 않거나 제공되지 않는 티커입니다 (코인 등 일부 상품 제외).")
+        st.warning(f"'{ticker_symbol}' 종목은 거래 가능한 옵션 시장 데이터가 존재하지 않거나 제공되지 않는 티커입니다.")
     else:
         selected_exp = st.selectbox("📅 옵션 만기일 선택", exp_dates)
         calls, puts, _ = get_option_chain_data(ticker_symbol, selected_exp)
@@ -649,23 +651,9 @@ with tab5:
             col_o1, col_o2, col_o3, col_o4 = st.columns(4)
             col_o1.metric("총 콜옵션 거래량", f"{int(call_vol):,}계약")
             col_o2.metric("총 풋옵션 거래량", f"{int(put_vol):,}계약")
-            col_o3.metric("거래량 기준 PCR", f"{pcr_vol:.2f}", help="1.0 이상이면 하방 압력 강함, 0.7 이하면 상방 기대감 높음")
+            col_o3.metric("거래량 기준 PCR (Put/Call)", f"{pcr_vol:.2f}", help="1.0 이상이면 하방 압력 강함, 0.7 이하면 상방 기대감 높음")
             col_o4.metric("미결제약정 기준 PCR", f"{pcr_oi:.2f}")
 
-            st.markdown("---")
-            st.subheader(f"🤖 [{selected_stock_name}] 옵션 시장 심리 및 파생상품 브리핑")
-            
-            comment_text = f"• **선택 만기일**: `{selected_exp}`\n"
-            if pcr_vol >= 1.0:
-                comment_text += f"• **시장 심리 진단**: 현재 풋옵션 거래량이 콜옵션보다 우세하여(거래량 PCR: **{pcr_vol:.2f}**), 단기 하방 압력이나 헤지(방어) 수요가 상대적으로 강한 국면입니다.\n"
-            elif pcr_vol <= 0.7:
-                comment_text += f"• **시장 심리 진단**: 콜옵션 거래량이 풋옵션을 압도하여(거래량 PCR: **{pcr_vol:.2f}**), 투자자들 사이에 강한 상방(반등 및 상승) 기대감이 형성되어 있습니다.\n"
-            else:
-                comment_text += f"• **시장 심리 진단**: 콜옵션과 풋옵션의 균형이 유지되고 있으며(거래량 PCR: **{pcr_vol:.2f}**), 방향성 탐색 중인 중립 구간입니다.\n"
-
-            comment_text += f"• **포지션 해석**: 총 미결제약정(콜 {int(call_oi):,}계약 / 풋 {int(put_oi):,})을 고려할 때, 해당 만기일 부근에서 행사가격별 프리미엄 공방이 치열하게 전개될 수 있습니다."
-            
-            st.info(comment_text)
             st.markdown("---")
 
             def clean_option_df(opt_df):
@@ -701,7 +689,7 @@ with tab5:
                         '미결제약정': '{:,.0f}'
                     }),
                     use_container_width=True,
-                    height=400
+                    height=450
                 )
 
             with c_tab2:
@@ -718,5 +706,5 @@ with tab5:
                         '미결제약정': '{:,.0f}'
                     }),
                     use_container_width=True,
-                    height=400
+                    height=450
                 )
