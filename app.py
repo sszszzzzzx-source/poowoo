@@ -151,6 +151,7 @@ stock_dict = st.session_state.sector_stocks[selected_sector]
 selected_stock_name = st.sidebar.selectbox("2. 개별 분석 종목 선택", list(stock_dict.keys()))
 ticker_symbol = stock_dict[selected_stock_name]
 
+# yfinance API 제약조건에 맞춰 타임프레임 최적화 (10m -> 7d)
 timeframe_map = {
     "전체 일봉 (All History)": ("1d", "max"),
     "전체 주봉 (Weekly All)": ("1wk", "max"),
@@ -158,7 +159,7 @@ timeframe_map = {
     "최근 5년 일봉 (5 Years)": ("1d", "5y"),
     "4시간봉 (4 Hours - 최근 60일)": ("60m", "60d"),
     "1시간봉 (1 Hour - 최근 60일)": ("60m", "60d"),
-    "10분봉 (10 Mins - 최근 30일)": ("10m", "30d"),
+    "10분봉 (10 Mins - 최근 7일)": ("10m", "7d"),
     "5분봉 (5 Mins - 최근 7일)": ("5m", "7d")
 }
 
@@ -352,7 +353,7 @@ df = load_and_analyze_data(ticker_symbol, interval_code, period_code, mdd_thresh
 # -----------------------------------------------------------------------------
 with tab1:
     if df.empty:
-        st.error(f"'{ticker_symbol}'의 데이터를 불러오지 못했습니다. 유효한 티커인지 확인해 주세요.")
+        st.error(f"'{ticker_symbol}'의 데이터를 불러오지 못했습니다. 선택하신 봉(타임프레임) 기간이나 티커 기호를 확인해 주세요.")
     else:
         latest = df.iloc[-1]
         prev = df.iloc[-2] if len(df) > 1 else latest
@@ -498,7 +499,6 @@ with tab3:
         summary_df = pd.DataFrame(scan_results)
 
         if not summary_df.empty:
-            # 소수점 둘째 자리까지 깔끔하게 포매팅 출력
             st.dataframe(
                 summary_df.style.format({
                     "현재가 ($)": "{:.2f}",
