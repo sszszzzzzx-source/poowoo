@@ -151,7 +151,6 @@ stock_dict = st.session_state.sector_stocks[selected_sector]
 selected_stock_name = st.sidebar.selectbox("2. 개별 분석 종목 선택", list(stock_dict.keys()))
 ticker_symbol = stock_dict[selected_stock_name]
 
-# yfinance API 제약조건에 맞춰 타임프레임 최적화 (10m -> 7d)
 timeframe_map = {
     "전체 일봉 (All History)": ("1d", "max"),
     "전체 주봉 (Weekly All)": ("1wk", "max"),
@@ -159,7 +158,7 @@ timeframe_map = {
     "최근 5년 일봉 (5 Years)": ("1d", "5y"),
     "4시간봉 (4 Hours - 최근 60일)": ("60m", "60d"),
     "1시간봉 (1 Hour - 최근 60일)": ("60m", "60d"),
-    "10분봉 (10 Mins - 최근 7일)": ("10m", "7d"),
+    "10분봉 (10 Mins - 최근 5일)": ("10m", "5d"),
     "5분봉 (5 Mins - 최근 7일)": ("5m", "7d")
 }
 
@@ -336,14 +335,30 @@ def get_stock_news(ticker):
     except Exception:
         return []
 
+@st.cache_data(ttl=600)
+def get_option_chain_data(ticker, expiration_date=None):
+    """야후 파이낸스에서 옵션 체인 데이터 수집"""
+    try:
+        t = yf.Ticker(ticker)
+        expirations = t.options
+        if not expirations:
+            return None, None, []
+        
+        selected_exp = expiration_date if expiration_date in expirations else expirations[0]
+        opt = t.option_chain(selected_exp)
+        return opt.calls, opt.puts, expirations
+    except Exception:
+        return None, None, []
+
 # -----------------------------------------------------------------------------
 # [3. 메인 대시보드 화면 구성 (탭 UI)]
 # -----------------------------------------------------------------------------
-tab1, tab2, tab3, tab4 = st.tabs([
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "📊 개별 종목 차트 & 뉴스", 
-    "📈 백테스팅 검증",
-    "🚨 신호 스캐너", 
-    "📐 피보나치 되돌림"
+    "📈 백테스팅 승률 검증",
+    "🚨 섹터 전체 종목 신호 스캐너", 
+    "📐 피보나치 되돌림 분석",
+    "📊 콜/풋 옵션 분석"
 ])
 
 df = load_and_analyze_data(ticker_symbol, interval_code, period_code, mdd_threshold, rsi_threshold, use_ma_filter)
@@ -383,156 +398,4 @@ with tab1:
         fig = make_subplots(
             rows=4, cols=1, 
             shared_xaxes=True, 
-            vertical_spacing=0.03, 
-            row_heights=[0.5, 0.15, 0.17, 0.18],
-            subplot_titles=("캔들스틱 & 이동평균선 & 볼린저밴드", "거래량", "RSI 지표", "MACD 지표")
-        )
-
-        fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name="주가"), row=1, col=1)
-
-        colors = {'SMA20': 'orange', 'SMA50': 'blue', 'SMA120': 'green', 'SMA200': 'purple'}
-        for sma in ['SMA20', 'SMA50', 'SMA120', 'SMA200']:
-            if sma in df.columns:
-                fig.add_trace(go.Scatter(x=df.index, y=df[sma], mode='lines', name=sma, line=dict(color=colors[sma], width=1)), row=1, col=1)
-
-        fig.add_trace(go.Scatter(x=df.index, y=df['BB_Upper'], mode='lines', name='BB 상단', line=dict(color='gray', dash='dash')), row=1, col=1)
-        fig.add_trace(go.Scatter(x=df.index, y=df['BB_Lower'], mode='lines', name='BB 하단', line=dict(color='gray', dash='dash')), row=1, col=1)
-
-        buy_signals = df[df['Buy_Signal']]
-        if not buy_signals.empty:
-            fig.add_trace(go.Scatter(
-                x=buy_signals.index, y=buy_signals['Close'],
-                mode='markers', name='🚨 매수신호',
-                marker=dict(color='red', size=11, symbol='triangle-up')
-            ), row=1, col=1)
-
-        fig.add_trace(go.Bar(x=df.index, y=df['Volume'], name="거래량", marker_color='gray'), row=2, col=1)
-        fig.add_trace(go.Scatter(x=df.index, y=df['RSI'], name="RSI", line=dict(color='purple')), row=3, col=1)
-        fig.add_hline(y=70, line_dash="dash", line_color="red", row=3, col=1)
-        fig.add_hline(y=30, line_dash="dash", line_color="green", row=3, col=1)
-
-        if 'MACD' in df.columns:
-            fig.add_trace(go.Scatter(x=df.index, y=df['MACD'], name="MACD", line=dict(color='blue')), row=4, col=1)
-            fig.add_trace(go.Scatter(x=df.index, y=df['MACD_Signal'], name="Signal", line=dict(color='orange')), row=4, col=1)
-            fig.add_trace(go.Bar(x=df.index, y=df['MACD_Hist'], name="Histogram", marker_color='lightgray'), row=4, col=1)
-
-        fig.update_layout(height=950, xaxis_rangeslider_visible=False, template="plotly_white")
-        st.plotly_chart(fig, use_container_width=True)
-
-        csv_data = df.to_csv().encode('utf-8-sig')
-        st.download_button(label=f"📥 {ticker_symbol} 데이터 CSV 다운로드", data=csv_data, file_name=f"{ticker_symbol}_data.csv", mime="text/csv")
-
-        st.markdown("---")
-        st.subheader(f"📰 [{selected_stock_name} ({ticker_symbol})] 실시간 최신 뉴스 및 외부 링크")
-        c1, c2, c3 = st.columns(3)
-        c1.markdown(f"👉 [Investing.com 검색](https://www.investing.com/search/?q={ticker_symbol})")
-        c2.markdown(f"👉 [Yahoo Finance 바로가기](https://finance.yahoo.com/quote/{ticker_symbol})")
-        c3.markdown(f"👉 [Google Finance 바로가기](https://www.google.com/finance/quote/{ticker_symbol}:US)")
-
-        if news_items:
-            for item in news_items[:5]:
-                st.markdown(f"* **[{item.get('publisher', '뉴스')}]** [{item.get('title')}]({item.get('link', '#')})")
-
-# -----------------------------------------------------------------------------
-# TAB 2: 백테스팅 승률 검증 Engine
-# -----------------------------------------------------------------------------
-with tab2:
-    st.subheader(f"📈 [{selected_stock_name} ({ticker_symbol})] 지표 매수 신호 과거 승률 검증")
-    st.info("현재 설정된 매수 조건을 바탕으로 과거 매수 신호 발생 시 익절/손절 목표 달성률을 시뮬레이션합니다.")
-
-    b_col1, b_col2, b_col3 = st.columns(3)
-    target_p = b_col1.number_input("목표 익절 수익률 (%)", value=5.0, step=0.5)
-    stop_p = b_col2.number_input("목표 손절 수익률 (%)", value=3.0, step=0.5)
-    hold_b = b_col3.number_input("최대 보유 기간 (봉 개수)", value=10, step=1)
-
-    if st.button("🧪 백테스트 시뮬레이션 실행"):
-        bt_df = run_backtest(df, target_pct=target_p, stop_pct=stop_p, hold_bars=int(hold_b))
-        
-        if bt_df.empty:
-            st.warning("조회된 기간 내에 매수 신호 조건이 발생한 과거 이력이 없습니다. 조건을 완화해 보세요.")
-        else:
-            total_trades = len(bt_df)
-            win_trades = len(bt_df[bt_df['성공 여부'] == "✅ 성공"])
-            win_rate = (win_trades / total_trades) * 100
-            avg_max_ret = bt_df['최고 수익률 (%)'].mean()
-
-            m1, m2, m3 = st.columns(3)
-            m1.metric("총 매수 신호 발생 횟수", f"{total_trades}회")
-            m2.metric("백테스팅 승률", f"{win_rate:.1f}%")
-            m3.metric("평균 최고 상승률", f"+{avg_max_ret:.2f}%")
-
-            st.dataframe(bt_df.style.format({"매수가 ($)": "${:.2f}", "최고 수익률 (%)": "+{:.2f}%", "최대 손실률 (%)": "{:.2f}%"}), use_container_width=True)
-
-# -----------------------------------------------------------------------------
-# TAB 3: 섹터 전체 종목 신호 스캐너 & 텔레그램 연동 발송
-# -----------------------------------------------------------------------------
-with tab3:
-    st.subheader(f"🔎 [{selected_sector}] 섹터 내 전체 종목 실시간 매수 신호 스캔")
-
-    if st.button("🚀 섹터 전체 스캔 실행하기"):
-        scan_results = []
-        captured_signals = []
-        progress_bar = st.progress(0)
-        items = list(stock_dict.items())
-        
-        for idx, (name, symbol) in enumerate(items):
-            stock_df = load_and_analyze_data(symbol, interval_code, period_code, mdd_threshold, rsi_threshold, use_ma_filter)
-            
-            if not stock_df.empty:
-                last_row = stock_df.iloc[-1]
-                is_buy = last_row['Buy_Signal']
-                
-                scan_results.append({
-                    "종목명": name,
-                    "티커": symbol,
-                    "현재가 ($)": last_row['Close'],
-                    "RSI (14)": last_row['RSI'] if pd.notnull(last_row['RSI']) else np.nan,
-                    "MDD (%)": last_row['MDD_Pct'] if pd.notnull(last_row['MDD_Pct']) else np.nan,
-                    "매수 신호": "🚨 매수 포착" if is_buy else "대기"
-                })
-
-                if is_buy:
-                    captured_signals.append(f"• *{name} ({symbol})*: 현재가 ${last_row['Close']:.2f} (RSI: {last_row['RSI']:.2f})")
-
-            progress_bar.progress((idx + 1) / len(items))
-
-        summary_df = pd.DataFrame(scan_results)
-
-        if not summary_df.empty:
-            st.dataframe(
-                summary_df.style.format({
-                    "현재가 ($)": "{:.2f}",
-                    "RSI (14)": "{:.2f}",
-                    "MDD (%)": "{:.2f}"
-                }).apply(
-                    lambda row: ['background-color: #ffcccc' if row['매수 신호'] == "🚨 매수 포착" else '' for _ in row], axis=1
-                ),
-                use_container_width=True
-            )
-
-            if captured_signals and tg_token and tg_chat_id:
-                msg_body = f"🚨 *[매수 신호 포착 알림]*\n\n*분야*: {selected_sector} ({selected_tf_name})\n\n" + "\n".join(captured_signals)
-                send_telegram_message(tg_token, tg_chat_id, msg_body)
-                st.success("📱 매수 포착 종목 정보를 텔레그램으로 전송했습니다!")
-
-# -----------------------------------------------------------------------------
-# TAB 4: 피보나치 되돌림 분석
-# -----------------------------------------------------------------------------
-with tab4:
-    st.subheader(f"📐 {selected_stock_name} ({ticker_symbol}) - 피보나치 되돌림 구간")
-    if not df.empty:
-        high_val = df['High'].max()
-        low_val = df['Low'].min()
-        diff = high_val - low_val
-
-        fib_levels = {
-            "0.0% (최고점)": high_val,
-            "23.6% 되돌림": high_val - 0.236 * diff,
-            "38.2% 되돌림": high_val - 0.382 * diff,
-            "50.0% 되돌림 (중요 지지)": high_val - 0.5 * diff,
-            "61.8% 되돌림 (황금 비율)": high_val - 0.618 * diff,
-            "78.6% 되돌림": high_val - 0.786 * diff,
-            "100.0% (최저점)": low_val
-        }
-
-        st.table(pd.DataFrame(list(fib_levels.items()), columns=["피보나치 레벨", "목표 가격 ($)"]).style.format({"목표 가격 ($)": "${:.2f}"}))
+            vertical_spacing
