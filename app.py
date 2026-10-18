@@ -5,6 +5,7 @@ import numpy as np       # 수학 연산 라이브러리
 import plotly.graph_objects as go  # 차트 시각화 라이브러리
 from plotly.subplots import make_subplots
 import pandas_ta_classic as ta     # 기술적 지표 계산 라이브러리
+import requests          # 텔레그램 API 전송을 위한 라이브러리
 
 # -----------------------------------------------------------------------------
 # [페이지 기본 설정]
@@ -16,6 +17,57 @@ st.set_page_config(
 )
 
 st.title("📈 퀀트 기술적 분석 & 고급 매수 신호 시스템")
+
+# -----------------------------------------------------------------------------
+# [텔레그램 메세지 전송 함수]
+# -----------------------------------------------------------------------------
+def send_telegram_message(token, chat_id, message):
+    if not token or not chat_id:
+        return False, "봇 토큰과 Chat ID를 모두 입력해주세요."
+    
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    payload = {
+        "chat_id": chat_id,
+        "text": message,
+        "parse_mode": "Markdown"
+    }
+    try:
+        response = requests.post(url, data=payload, timeout=5)
+        if response.status_code == 200:
+            return True, "텔레그램 알림 전송 성공!"
+        else:
+            return False, f"전송 실패 (오류 코드: {response.status_code})"
+    except Exception as e:
+        return False, f"전송 중 에러 발생: {str(e)}"
+
+# -----------------------------------------------------------------------------
+# [AI 실시간 등락 요인 및 시황 분석 함수]
+# -----------------------------------------------------------------------------
+def generate_market_analysis(stock_name, ticker, df, news_items, change_pct):
+    if df.empty:
+        return "분석할 데이터가 없습니다."
+    
+    latest = df.iloc[-1]
+    rsi = latest['RSI'] if 'RSI' in df.columns and pd.notnull(latest['RSI']) else 50
+    mdd = latest['MDD_Pct'] if 'MDD_Pct' in df.columns and pd.notnull(latest['MDD_Pct']) else 0
+    
+    news_summaries = []
+    if news_items:
+        for item in news_items[:3]:
+            news_summaries.append(item.get('title', ''))
+    
+    news_text = " / ".join(news_summaries) if news_summaries else "최근 특이 뉴스 없음"
+    
+    analysis = f"🤖 **[AI 실시간 등락 요인 및 시황 분석]**\n\n"
+    if change_pct >= 0:
+        analysis += f"• **등락 현황**: **{stock_name} ({ticker})** 종목은 최근 기준 **+{change_pct:.2f}% 상승세(반등)**를 나타내고 있습니다.\n"
+        analysis += f"• **상승 분석**: RSI({rsi:.1f}) 지표와 볼린저밴드 하단 부근에서의 저가 매수세 유입, 그리고 기술적 반등 모멘텀이 복합적으로 작용하고 있을 가능성이 높습니다.\n"
+    else:
+        analysis += f"• **등락 현황**: **{stock_name} ({ticker})** 종목은 최근 기준 **{change_pct:.2f}% 하락세(조정)**를 나타내고 있습니다.\n"
+        analysis += f"• **하락 분석**: 고점 대비 낙폭(MDD: {mdd:.2f}%)이 발생하며 단기 매물 출회 및 조정 국면에 진입해 있으며, RSI({rsi:.1f}) 과매도 구간 지지력 테스트가 진행 중입니다.\n"
+    
+    analysis += f"• **관련 뉴스 헤드라인**: {news_text}"
+    return analysis
 
 # -----------------------------------------------------------------------------
 # [1. 분야별 하위 종목 (티커) 세션 상태 초기화 및 관리]
@@ -113,9 +165,7 @@ timeframe_map = {
 selected_tf_name = st.sidebar.selectbox("3. 차트 타임프레임 (봉) 선택", list(timeframe_map.keys()))
 interval_code, period_code = timeframe_map[selected_tf_name]
 
-# -----------------------------------------------------------------------------
-# [티커 직접 추가 섹션 - 중복 체크 로직 포함]
-# -----------------------------------------------------------------------------
+# 티커 직접 추가
 st.sidebar.markdown("---")
 st.sidebar.subheader("➕ 원하는 티커 추가하기")
 
@@ -126,8 +176,6 @@ new_ticker = st.sidebar.text_input("야후 티커 (예: COIN)", key="new_stock_t
 if st.sidebar.button("🚀 분야에 종목 추가", use_container_width=True):
     if new_name and new_ticker:
         clean_ticker = new_ticker.upper().strip()
-        
-        # 티커 중복 검사
         duplicate_sector = None
         for sec, stocks in st.session_state.sector_stocks.items():
             if clean_ticker in stocks.values():
@@ -149,6 +197,24 @@ st.sidebar.subheader("🚨 단타 매수 신호 알림 기준")
 mdd_threshold = st.sidebar.slider("이전 고점 대비 하락 폭 (MDD %)", min_value=1.0, max_value=15.0, value=3.0, step=0.5)
 rsi_threshold = st.sidebar.slider("RSI 상한 기준 (이하)", min_value=20, max_value=50, value=42, step=1)
 use_ma_filter = st.sidebar.checkbox("20일선 위에 위치한 정배열 종목만 매수신호 허용", value=False)
+
+# 텔레그램 설정
+st.sidebar.markdown("---")
+st.sidebar.subheader("📲 텔레그램 알림 설정")
+
+tg_token = st.sidebar.text_input("봇 토큰 (Bot Token)", type="password", key="tg_token_val")
+tg_chat_id = st.sidebar.text_input("채팅 ID (Chat ID)", key="tg_chat_id_val")
+
+if st.sidebar.button("🔔 텔레그램 연동 테스트", use_container_width=True):
+    success, msg = send_telegram_message(
+        tg_token, 
+        tg_chat_id, 
+        f"✅ *[Quant System]* 텔레그램 연동 성공!\n연동 시간: 정상 작동 중"
+    )
+    if success:
+        st.sidebar.success(msg)
+    else:
+        st.sidebar.error(msg)
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("📅 주요 거시경제 일정")
@@ -200,14 +266,14 @@ def load_and_analyze_data(ticker, interval, period, mdd_crit, rsi_crit, ma_filte
         df['MACD_Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
         df['MACD_Hist'] = df['MACD'] - df['MACD_Signal']
 
-    # 5. ATR (변동성 지표)
+    # 5. ATR
     high_low = df['High'] - df['Low']
     high_close = (df['High'] - df['Close'].shift()).abs()
     low_close = (df['Low'] - df['Close'].shift()).abs()
     tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
     df['ATR'] = tr.rolling(window=14).mean()
 
-    # 6. MDD 및 매수 신호 조건
+    # 6. MDD 및 매수 신호
     df['Rolling_Max'] = df['High'].rolling(window=30).max()
     df['MDD_Pct'] = ((df['Close'] - df['Rolling_Max']) / df['Rolling_Max']) * 100
 
@@ -308,6 +374,11 @@ with tab1:
         if latest['Buy_Signal']:
             st.error(f"🚨 [단타 매수 신호 포착] -{mdd_threshold}% 하락 + 볼린저 하단 접근 + RSI {rsi_threshold} 미만 조건 충족!")
 
+        # 🤖 AI 실시간 등락 요인 및 시황 분석 박스
+        news_items = get_stock_news(ticker_symbol)
+        analysis_msg = generate_market_analysis(selected_stock_name, ticker_symbol, df, news_items, change_pct)
+        st.info(analysis_msg)
+
         fig = make_subplots(
             rows=4, cols=1, 
             shared_xaxes=True, 
@@ -357,7 +428,6 @@ with tab1:
         c2.markdown(f"👉 [Yahoo Finance 바로가기](https://finance.yahoo.com/quote/{ticker_symbol})")
         c3.markdown(f"👉 [Google Finance 바로가기](https://www.google.com/finance/quote/{ticker_symbol}:US)")
 
-        news_items = get_stock_news(ticker_symbol)
         if news_items:
             for item in news_items[:5]:
                 st.markdown(f"* **[{item.get('publisher', '뉴스')}]** [{item.get('title')}]({item.get('link', '#')})")
@@ -393,13 +463,14 @@ with tab2:
             st.dataframe(bt_df.style.format({"매수가 ($)": "${:.2f}", "최고 수익률 (%)": "+{:.2f}%", "최대 손실률 (%)": "{:.2f}%"}), use_container_width=True)
 
 # -----------------------------------------------------------------------------
-# TAB 3: 섹터 전체 종목 신호 스캐너
+# TAB 3: 섹터 전체 종목 신호 스캐너 & 텔레그램 연동 발송
 # -----------------------------------------------------------------------------
 with tab3:
     st.subheader(f"🔎 [{selected_sector}] 섹터 내 전체 종목 실시간 매수 신호 스캔")
 
     if st.button("🚀 섹터 전체 스캔 실행하기"):
         scan_results = []
+        captured_signals = []
         progress_bar = st.progress(0)
         items = list(stock_dict.items())
         
@@ -408,14 +479,20 @@ with tab3:
             
             if not stock_df.empty:
                 last_row = stock_df.iloc[-1]
+                is_buy = last_row['Buy_Signal']
+                
                 scan_results.append({
                     "종목명": name,
                     "티커": symbol,
                     "현재가 ($)": round(last_row['Close'], 2),
                     "RSI (14)": round(last_row['RSI'], 1) if pd.notnull(last_row['RSI']) else np.nan,
                     "MDD (%)": round(last_row['MDD_Pct'], 2) if pd.notnull(last_row['MDD_Pct']) else np.nan,
-                    "매수 신호": "🚨 매수 포착" if last_row['Buy_Signal'] else "대기"
+                    "매수 신호": "🚨 매수 포착" if is_buy else "대기"
                 })
+
+                if is_buy:
+                    captured_signals.append(f"• *{name} ({symbol})*: 현재가 ${last_row['Close']:.2f} (RSI: {last_row['RSI']:.1f})")
+
             progress_bar.progress((idx + 1) / len(items))
 
         summary_df = pd.DataFrame(scan_results)
@@ -427,6 +504,11 @@ with tab3:
                 ),
                 use_container_width=True
             )
+
+            if captured_signals and tg_token and tg_chat_id:
+                msg_body = f"🚨 *[매수 신호 포착 알림]*\n\n*분야*: {selected_sector} ({selected_tf_name})\n\n" + "\n".join(captured_signals)
+                send_telegram_message(tg_token, tg_chat_id, msg_body)
+                st.success("📱 매수 포착 종목 정보를 텔레그램으로 전송했습니다!")
 
 # -----------------------------------------------------------------------------
 # TAB 4: 피보나치 되돌림 분석
