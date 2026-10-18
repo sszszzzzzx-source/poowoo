@@ -380,17 +380,17 @@ def get_option_chain_data(ticker, expiration_date=None):
 # [3. 메인 대시보드 화면 구성 (탭 UI)]
 # -----------------------------------------------------------------------------
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "📊 개별 종목 차트 & 뉴스", 
-    "📈 백테스팅 승률 검증",
-    "🚨 섹터 전체 종목 신호 스캐너", 
-    "📐 피보나치 되돌림 분석",
-    "📊 콜/풋 옵션 분석"
+    "📊 차트 & 뉴스", 
+    "📈 백테스팅 검증",
+    "🚨 신호 스캐너", 
+    "📐 피보나치 되돌림",
+    "📊 콜/풋 옵션"
 ])
 
 df = load_and_analyze_data(ticker_symbol, interval_code, period_code, mdd_threshold, rsi_threshold, use_ma_filter)
 
 # -----------------------------------------------------------------------------
-# TAB 1: 개별 종목 차트 & 뉴스
+# TAB 1: 차트 & 뉴스
 # -----------------------------------------------------------------------------
 with tab1:
     if df.empty:
@@ -416,7 +416,7 @@ with tab1:
         if latest['Buy_Signal']:
             st.error(f"🚨 [단타 매수 신호 포착] -{mdd_threshold}% 하락 + 볼린저 하단 접근 + RSI {rsi_threshold} 미만 조건 충족!")
 
-        # 🤖 AI 실시간 등락 요인 및 시황 분석 박스
+        # 🤖 AI 실시간 등락 요인 및 시황 분석
         news_items = get_stock_news(ticker_symbol)
         analysis_msg = generate_market_analysis(selected_stock_name, ticker_symbol, df, news_items, change_pct)
         st.info(analysis_msg)
