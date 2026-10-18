@@ -33,7 +33,35 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("📈 기술적 분석 & 매수 신호 시스템")
+# -----------------------------------------------------------------------------
+# [비밀번호 인증 시스템]
+# -----------------------------------------------------------------------------
+CORRECT_PASSWORD = "5882"  # 👈 이곳의 숫자를 원하시는 비밀번호로 변경하세요!
+
+if "authenticated" not in st.session_state:
+    st.session_state.authenticated = False
+
+if not st.session_state.authenticated:
+    st.title("🔒 퀀트 대시보드 로그인")
+    st.markdown("대시보드에 접근하려면 비밀번호를 입력해주세요.")
+    
+    input_pw = st.text_input("비밀번호", type="password")
+    
+    if st.button("로그인", use_container_width=True):
+        if input_pw == CORRECT_PASSWORD:
+            st.session_state.authenticated = True
+            st.success("로그인 성공! 대시보드를 불러오는 중...")
+            st.rerun()
+        else:
+            st.error("⚠️ 비밀번호가 틀렸습니다. 다시 확인해 주세요.")
+    
+    st.stop()  # 비밀번호가 일치하기 전에는 아래 메인 코드가 실행되지 않도록 차단
+
+# =============================================================================
+# [이 아래부터는 로그인이 성공했을 때만 보이는 메인 대시보드 영역]
+# =============================================================================
+
+st.title("📈 퀀트 기술적 분석 & 고급 매수 신호 시스템")
 
 # -----------------------------------------------------------------------------
 # [텔레그램 메세지 전송 함수]
@@ -87,7 +115,7 @@ def generate_market_analysis(stock_name, ticker, df, news_items, change_pct):
     return analysis
 
 # -----------------------------------------------------------------------------
-# [1. 분야별 하위 종목 (티커) 세션 상태 초기화 및 관리 (바이낸스 코인 세션 추가)]
+# [1. 분야별 하위 종목 (티커) 세션 상태 초기화 및 관리]
 # -----------------------------------------------------------------------------
 if "sector_stocks" not in st.session_state:
     st.session_state.sector_stocks = {
@@ -248,7 +276,7 @@ st.sidebar.subheader("📅 주요 거시경제 일정")
 st.sidebar.link_button("🗓️ Investing.com 경제캘린더", "https://kr.investing.com/economic-calendar/", use_container_width=True)
 
 # -----------------------------------------------------------------------------
-# [2. 데이터 수집 및 기술적 지표 연산 (동일 유지)]
+# [2. 데이터 수집 및 기술적 지표 연산]
 # -----------------------------------------------------------------------------
 @st.cache_data(ttl=300)
 def load_and_analyze_data(ticker, interval, period, mdd_crit, rsi_crit, ma_filter):
@@ -380,17 +408,17 @@ def get_option_chain_data(ticker, expiration_date=None):
 # [3. 메인 대시보드 화면 구성 (탭 UI)]
 # -----------------------------------------------------------------------------
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "📊 차트 & 뉴스", 
-    "📈 백테스팅 검증",
-    "🚨 신호 스캐너", 
-    "📐 피보나치 되돌림",
-    "📊 콜/풋 옵션"
+    "📊 개별 종목 차트 & 뉴스", 
+    "📈 백테스팅 승률 검증",
+    "🚨 섹터 전체 종목 신호 스캐너", 
+    "📐 피보나치 되돌림 분석",
+    "📊 콜/풋 옵션 분석"
 ])
 
 df = load_and_analyze_data(ticker_symbol, interval_code, period_code, mdd_threshold, rsi_threshold, use_ma_filter)
 
 # -----------------------------------------------------------------------------
-# TAB 1: 차트 & 뉴스
+# TAB 1: 개별 종목 차트 & 뉴스
 # -----------------------------------------------------------------------------
 with tab1:
     if df.empty:
@@ -416,7 +444,7 @@ with tab1:
         if latest['Buy_Signal']:
             st.error(f"🚨 [단타 매수 신호 포착] -{mdd_threshold}% 하락 + 볼린저 하단 접근 + RSI {rsi_threshold} 미만 조건 충족!")
 
-        # 🤖 AI 실시간 등락 요인 및 시황 분석
+        # 🤖 AI 실시간 등락 요인 및 시황 분석 박스
         news_items = get_stock_news(ticker_symbol)
         analysis_msg = generate_market_analysis(selected_stock_name, ticker_symbol, df, news_items, change_pct)
         st.info(analysis_msg)
